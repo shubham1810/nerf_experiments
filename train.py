@@ -28,7 +28,9 @@ from pytorch_lightning.loggers import TestTubeLogger
 class NeRFSystem(LightningModule):
     def __init__(self, hparams):
         super(NeRFSystem, self).__init__()
-        self.hparams = hparams
+        self.save_hyperparameters(hparams)
+
+        # print("Hyperparameters:", self.hparams)
 
         self.loss = loss_dict['color'](coef=1)
 
@@ -42,7 +44,8 @@ class NeRFSystem(LightningModule):
         load_ckpt(self.nerf_coarse, hparams.weight_path, 'nerf_coarse')
 
         if hparams.N_importance > 0:
-            self.nerf_fine = NeRF()
+            # self.nerf_fine = NeRF()
+            self.nerf_fine = NeRFGraph()
             self.models['fine'] = self.nerf_fine
             load_ckpt(self.nerf_fine, hparams.weight_path, 'nerf_fine')
 
@@ -152,11 +155,11 @@ class NeRFSystem(LightningModule):
 def main(hparams):
     system = NeRFSystem(hparams)
     checkpoint_callback = \
-        ModelCheckpoint(filepath=os.path.join(f'ckpts/{hparams.exp_name}',
-                                               '{epoch:d}'),
+        ModelCheckpoint(dirpath=f'ckpts/{hparams.exp_name}',
+                        filename='{epoch:d}',
                         monitor='val/psnr',
                         mode='max',
-                        save_top_k=5)
+                        save_top_k=-1)
 
     logger = TestTubeLogger(save_dir="logs",
                             name=hparams.exp_name,
@@ -165,7 +168,8 @@ def main(hparams):
                             log_graph=False)
 
     trainer = Trainer(max_epochs=hparams.num_epochs,
-                      checkpoint_callback=checkpoint_callback,
+                      checkpoint_callback=True,
+                      callbacks=[checkpoint_callback],
                       resume_from_checkpoint=hparams.ckpt_path,
                       logger=logger,
                       weights_summary=None,
@@ -177,6 +181,7 @@ def main(hparams):
                       profiler="simple" if hparams.num_gpus==1 else None)
 
     trainer.fit(system)
+    trainer.save_checkpoint(f'ckpts/{hparams.exp_name}/last_epoch.ckpt')
 
 
 if __name__ == '__main__':

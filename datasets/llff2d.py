@@ -158,7 +158,7 @@ def create_spheric_poses(radius, n_poses=120):
     return np.stack(spheric_poses, 0)
 
 
-class LLFFDataset(Dataset):
+class LLFF2DDataset(Dataset):
     def __init__(self, root_dir, split='train', img_wh=(504, 378), spheric_poses=False, val_num=1):
         """
         spheric_poses: whether the images are taken in a spheric inward-facing manner
@@ -255,7 +255,8 @@ class LLFFDataset(Dataset):
                 #         please check your data!'''
                 img = img.resize(self.img_wh, Image.LANCZOS)
                 img = self.transform(img) # (3, h, w)
-                img = img.view(3, -1).permute(1, 0) # (h*w, 3) RGB
+                img = img.permute(1, 2, 0)
+                # img = img.view(3, -1).permute(1, 0) # (h*w, 3) RGB
                 self.all_rgbs += [img]
                 
                 rays_o, rays_d = get_rays(self.directions, c2w) # both (h*w, 3)
@@ -273,10 +274,10 @@ class LLFFDataset(Dataset):
                 self.all_rays += [torch.cat([rays_o, rays_d, 
                                              near*torch.ones_like(rays_o[:, :1]),
                                              far*torch.ones_like(rays_o[:, :1])],
-                                             1)] # (h*w, 8)
+                                             1).reshape(self.img_wh[1], self.img_wh[0], -1)] # (h*w, 8)
                                  
-            self.all_rays = torch.cat(self.all_rays, 0) # ((N_images-1)*h*w, 8)
-            self.all_rgbs = torch.cat(self.all_rgbs, 0) # ((N_images-1)*h*w, 3)
+            # self.all_rays = torch.cat(self.all_rays, 0) # ((N_images-1)*h*w, 8)
+            # self.all_rgbs = torch.cat(self.all_rgbs, 0) # ((N_images-1)*h*w, 3)
         
         elif self.split == 'val':
             print('val image is', self.image_paths[val_idx])
@@ -332,7 +333,7 @@ class LLFFDataset(Dataset):
             rays = torch.cat([rays_o, rays_d, 
                               near*torch.ones_like(rays_o[:, :1]),
                               far*torch.ones_like(rays_o[:, :1])],
-                              1) # (h*w, 8)
+                              1).reshape(self.img_wh[1], self.img_wh[0], -1) # (h*w, 8)
 
             sample = {'rays': rays,
                       'c2w': c2w}
@@ -343,7 +344,8 @@ class LLFFDataset(Dataset):
                 img = Image.open(self.image_paths[idx]).convert('RGB')
                 img = img.resize(self.img_wh, Image.LANCZOS)
                 img = self.transform(img) # (3, h, w)
-                img = img.view(3, -1).permute(1, 0) # (h*w, 3)
+                img = img.permute(1, 2, 0)
+                # img = img.view(3, -1).permute(1, 0) # (h*w, 3)
                 sample['rgbs'] = img
 
         return sample

@@ -144,14 +144,24 @@ def render_rays(models,
         weights_sum = reduce(weights, 'n1 n2 -> n1', 'sum') # (N_rays), the accumulated opacity along the rays
                                                             # equals "1 - (1-a1)(1-a2)...(1-an)" mathematically
 
+        # [CHANGES]: Added a softmax part on the weights here
+        wts_sf = torch.nn.functional.softmax(weights*2, dim=-1)
+        # print(sigmas.mean(-1).shape, sigmas_sf.shape)
+        wts = wts_sf
+
+        # print(reduce(wts, 'n1 n2 -> n1', 'sum'), weights_sum)
+
         results[f'weights_{typ}'] = weights
         results[f'opacity_{typ}'] = weights_sum
         results[f'z_vals_{typ}'] = z_vals
         if test_time and typ == 'coarse' and 'fine' in models:
             return
 
+        # rgb_map = reduce(rearrange(wts, 'n1 n2 -> n1 n2 1')*rgbs, 'n1 n2 c -> n1 c', 'sum')
         rgb_map = reduce(rearrange(weights, 'n1 n2 -> n1 n2 1')*rgbs, 'n1 n2 c -> n1 c', 'sum')
-        depth_map = reduce(weights*z_vals, 'n1 n2 -> n1', 'sum')
+
+        depth_map = reduce(wts*z_vals, 'n1 n2 -> n1', 'sum')
+        # depth_map = reduce(weights*z_vals, 'n1 n2 -> n1', 'sum')
 
         if white_back:
             rgb_map += 1-weights_sum.unsqueeze(1)
