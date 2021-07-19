@@ -263,3 +263,78 @@ class NeRFGraph(nn.Module):
         out = torch.cat([rgb, sigma], -1)
 
         return out
+
+
+class NeRF2D(nn.Module):
+    def __init__(self,
+                K=[3, 3, 1, 1, 3, 3, 1, 1], W=256,
+                in_channels_xyz=63, in_channels_dir=27,
+                skips=[4]
+                ):
+        super(NeRF2D, self).__init__()
+
+        self.K = K
+        self.D = len(self.K)
+        self.W = W
+        self.in_channels_xyz = in_channels_xyz
+        self.in_channels_dir = in_channels_dir
+        self.skips = skips
+
+        # xyz encoding layers
+        for i in range(self.D):
+            kern = self.K[i]
+            pad = kern//2
+            if kern == 1:
+                pad = 0
+            if i == 0:
+                layer = nn.Conv2d(in_channels_xyz, W, kern, padding=pad, padding_mode='reflect')
+            elif i in skips:
+                layer = nn.Conv2d(in_channels_xyz+W, W, kern, padding=pad, padding_mode='reflect')
+            else:
+                layer = nn.Conv2d(W, W, kern, padding=pad, padding_mode='reflect')
+            layer = nn.Sequential(layer, nn.ReLU(True))
+            setattr(self, f"xyz_encoding_{i+1}", layer)
+        
+        self.xyz_encoding_final = nn.Conv2d(W, W, 1)
+
+        # Direction encoding layers
+        self.dir_encoding = nn.Sequential(
+                                    nn.Conv2d(W+in_channels_dir, W//2, 3, padding=1, padding_mode='reflect'),
+                                    nn.ReLU(True),
+                                    nn.Conv2d(W//2, W//2, 1),
+                                    nn.ReLU(True),
+                                )
+        
+        # output layers
+        self.sigma = nn.Conv2d(W, 1, 1)
+        self.rgb = nn.Sequential(
+                            nn.Conv2d(W//2, 3, 1),
+                            nn.Sigmoid()
+                        )
+        
+    
+    def forward(self, x, sigma_only=False):
+        if not sigma_only:
+            input_xyz, input_dir = \
+                torch.split(x, [self.in_channels_xyz, self.in_channels_dir], dim=1)
+        else:
+            input_xyz = x
+        
+        xyz_ =  input_xyz
+        for i in range(self.D):
+            if i in self.skips:
+                xyz_ = torch.cat([input_xyz, xyz_], 1)
+            xyz_ =  getattr(self, f"xyz_encoding_{i+1}")(xyz_)
+        
+        sigma = self.sigma(xyz_)
+        if sigma_only:
+            return sigma
+        
+        xyz_encoding_final = self.xyz_encoding_final(xyz_)
+
+        dir_encoding_input = torch.cat([xyz_encoding_final, input_dir], 1)
+        dir_encoding = self.dir_encoding(dir_encoding_input)
+        rgb = self.rgb(dir_encoding)
+
+        out = torch.cat([rgb, sigma], 1)
+        return out
