@@ -159,7 +159,7 @@ def create_spheric_poses(radius, n_poses=120):
 
 
 class LLFF2DDataset(Dataset):
-    def __init__(self, root_dir, split='train', img_wh=(504, 378), spheric_poses=False, val_num=1):
+    def __init__(self, root_dir, split='train', img_wh=(504, 378), spheric_poses=False, val_num=1, img_chunk=(32, 32), apply_skip=True):
         """
         spheric_poses: whether the images are taken in a spheric inward-facing manner
                        default: False (forward-facing)
@@ -168,9 +168,17 @@ class LLFF2DDataset(Dataset):
         self.root_dir = root_dir
         self.split = split
         self.img_wh = img_wh
+
+        # For making the chunks smaller
+        self.img_chunk = img_chunk
+        self.apply_skip = apply_skip
+
         self.spheric_poses = spheric_poses
         self.val_num = max(1, val_num) # at least 1
         self.define_transforms()
+
+        # prepare number of skips
+        self.skips = (self.img_wh[1] // self.img_chunk[1], self.img_wh[0] // self.img_chunk[0])
 
         self.read_meta()
         self.white_back = False
@@ -257,25 +265,38 @@ class LLFF2DDataset(Dataset):
                 img = self.transform(img) # (3, h, w)
                 img = img.permute(1, 2, 0)
                 # img = img.view(3, -1).permute(1, 0) # (h*w, 3) RGB
-                self.all_rgbs += [img]
+
+                if self.apply_skip:
+                    for sx in range(self.skips[0]):
+                        for sy in range(self.skips[1]):
+                            self.all_rgbs += [img[sx::self.skips[0], sy::self.skips[1]]]
+                else:
+                    self.all_rgbs += [img]
                 
                 rays_o, rays_d = get_rays(self.directions, c2w) # both (h*w, 3)
                 if not self.spheric_poses:
                     near, far = 0, 1
                     rays_o, rays_d = get_ndc_rays(self.img_wh[1], self.img_wh[0],
-                                                  self.focal, 1.0, rays_o, rays_d)
-                                     # near plane is always at 1.0
-                                     # near and far in NDC are always 0 and 1
-                                     # See https://github.com/bmild/nerf/issues/34
+                                                self.focal, 1.0, rays_o, rays_d)
+                                    # near plane is always at 1.0
+                                    # near and far in NDC are always 0 and 1
+                                    # See https://github.com/bmild/nerf/issues/34
                 else:
                     near = self.bounds.min()
                     far = min(8 * near, self.bounds.max()) # focus on central object only
 
-                self.all_rays += [torch.cat([rays_o, rays_d, 
-                                             near*torch.ones_like(rays_o[:, :1]),
-                                             far*torch.ones_like(rays_o[:, :1])],
-                                             1).reshape(self.img_wh[1], self.img_wh[0], -1)] # (h*w, 8)
-                                 
+                current_rays = torch.cat([rays_o, rays_d, 
+                                            near*torch.ones_like(rays_o[:, :1]),
+                                            far*torch.ones_like(rays_o[:, :1])],
+                                            1).reshape(self.img_wh[1], self.img_wh[0], -1) # (h*w, 8)
+                
+                if self.apply_skip:
+                    for sx in range(self.skips[0]):
+                        for sy in range(self.skips[1]):
+                            self.all_rays += [current_rays[sx::self.skips[0], sy::self.skips[1]]]
+                else:
+                    self.all_rays += [current_rays]
+
             # self.all_rays = torch.cat(self.all_rays, 0) # ((N_images-1)*h*w, 8)
             # self.all_rgbs = torch.cat(self.all_rgbs, 0) # ((N_images-1)*h*w, 3)
         
