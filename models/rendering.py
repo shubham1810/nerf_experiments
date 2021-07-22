@@ -1,7 +1,7 @@
 import torch
 from einops import rearrange, reduce, repeat
 
-__all__ = ['render_rays']
+__all__ = ['render_rays', 'render_2d_rays']
 
 
 def sample_pdf(bins, weights, N_importance, det=False, eps=1e-5):
@@ -71,11 +71,12 @@ def sample_pdf2d(bins, weights, N_importance, det=False, eps=1e-5):
     cdf_g = rearrange(torch.gather(cdf, 2, inds_sampled), 'h w (n2 c) -> h w n2 c', c=2)
     bins_g = rearrange(torch.gather(bins, 2, inds_sampled), 'h w (n2 c) -> h w n2 c', c=2)
 
-    denom = cdf_g[..., 1] -cdf_g[..., 0]
-    denom[denom<eps] = 1 # denom equals 0 means a bin has weight 0,
-                        # in which case it will not be sampled
-                        # anyway, therefore any value for it is fine (set to 1 here)
-
+    denom = cdf_g[..., 1] - cdf_g[..., 0]
+    if (denom<eps).sum() > 0:
+        denom[denom<eps] = 1 # denom equals 0 means a bin has weight 0,
+                            # in which case it will not be sampled
+                            # anyway, therefore any value for it is fine (set to 1 here)
+    
     samples = bins_g[...,0] + (u-cdf_g[...,0])/denom * (bins_g[...,1]-bins_g[...,0])
     return samples
 

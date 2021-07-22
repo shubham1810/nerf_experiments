@@ -267,7 +267,7 @@ class NeRFGraph(nn.Module):
 
 class NeRF2D(nn.Module):
     def __init__(self,
-                K=[3, 3, 1, 1, 3, 3, 1, 1], W=256,
+                K=[3, 3, 1, 3, 1, 1], W=256,
                 in_channels_xyz=63, in_channels_dir=27,
                 skips=[4]
                 ):

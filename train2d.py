@@ -39,13 +39,13 @@ class NeRFSystem(LightningModule):
         self.embeddings = {'xyz': self.embedding_xyz,
                            'dir': self.embedding_dir}
 
-        self.nerf_coarse = NeRF()
+        self.nerf_coarse = NeRF2D()
         self.models = {'coarse': self.nerf_coarse}
         load_ckpt(self.nerf_coarse, hparams.weight_path, 'nerf_coarse')
 
         if hparams.N_importance > 0:
             # self.nerf_fine = NeRF()
-            self.nerf_fine = NeRFGraph()
+            self.nerf_fine = NeRF2D()
             self.models['fine'] = self.nerf_fine
             load_ckpt(self.nerf_fine, hparams.weight_path, 'nerf_fine')
 
@@ -58,24 +58,70 @@ class NeRFSystem(LightningModule):
         """Do batched inference on rays using chunk."""
         B = rays.shape[0]
         results = defaultdict(list)
-        for i in range(0, B, self.hparams.chunk):
-            rendered_ray_chunks = \
-                render_rays(self.models,
-                            self.embeddings,
-                            rays[i:i+self.hparams.chunk],
-                            self.hparams.N_samples,
-                            self.hparams.use_disp,
-                            self.hparams.perturb,
-                            self.hparams.noise_std,
-                            self.hparams.N_importance,
-                            self.hparams.chunk, # chunk size is effective in val mode
-                            self.train_dataset.white_back)
-
-            for k, v in rendered_ray_chunks.items():
+        for bx in range(B):
+            results_chunks = render_2d_rays(self.models,
+                                self.embeddings,
+                                rays[bx],
+                                self.hparams.N_samples,
+                                self.hparams.use_disp,
+                                self.hparams.perturb,
+                                self.hparams.noise_std,
+                                self.hparams.N_importance,
+                                self.hparams.chunk, # chunk size is effective in val mode
+                                self.train_dataset.white_back)
+            for k, v in results_chunks.items():
                 results[k] += [v]
-
+        
         for k, v in results.items():
             results[k] = torch.cat(v, 0)
+        
+        return results
+    
+    def val_forward(self, rays):
+        """
+        Perform inference on validation data. break inpo parts and
+        then reassemble.
+        """
+        # print(rays.shape)
+        results = defaultdict(list)
+        if self.val_dataset.apply_skip:
+            # Create a template for the outputs
+            template_rgb_coarse = torch.zeros_like(rays[..., :3])
+            template_rgb_fine = torch.zeros_like(rays[..., :3])
+            template_depth_coarse = torch.zeros_like(rays[..., 0])
+            template_depth_fine = torch.zeros_like(rays[..., 0])
+
+            # Divide the data samples
+            for sx in range(self.val_dataset.skips[0]):
+                for sy in range(self.val_dataset.skips[1]):
+                    rays_segment = rays[sx::self.val_dataset.skips[0], sy::self.val_dataset.skips[1]]
+                    # [TODO]: A very weird "CUDA Assert triggered" error occurs in sample_pdf2d if
+                    # I remove this no_grad part. Figure out why!
+                    # [UPDATE]: nvm. the error is coming when perturmation!=0. i.e. when doing random sampling.
+                    with torch.no_grad():
+                        op = render_2d_rays(self.models,
+                                self.embeddings,
+                                rays_segment,
+                                self.hparams.N_samples,
+                                self.hparams.use_disp,
+                                self.hparams.perturb,
+                                self.hparams.noise_std,
+                                self.hparams.N_importance,
+                                self.hparams.chunk, # chunk size is effective in val mode
+                                self.train_dataset.white_back)
+                    template_rgb_coarse[sx::self.val_dataset.skips[0], sy::self.val_dataset.skips[1]] = op['rgb_coarse']
+                    template_depth_coarse[sx::self.val_dataset.skips[0], sy::self.val_dataset.skips[1]] = op['depth_coarse']
+
+                    if 'rgb_fine' in op:
+                        template_rgb_fine[sx::self.val_dataset.skips[0], sy::self.val_dataset.skips[1]] = op['rgb_fine']
+                        template_depth_fine[sx::self.val_dataset.skips[0], sy::self.val_dataset.skips[1]] = op['depth_fine']
+
+            # Now fill all these in results
+            results['rgb_coarse'] = template_rgb_coarse
+            results['depth_coarse'] = template_depth_coarse
+            if 'rgb_fine' in op:
+                results['rgb_fine'] = template_rgb_fine
+                results['depth_fine'] = template_depth_fine
         return results
 
     def setup(self, stage):
@@ -110,6 +156,9 @@ class NeRFSystem(LightningModule):
     def training_step(self, batch, batch_nb):
         rays, rgbs = batch['rays'], batch['rgbs']
         results = self(rays)
+
+        if rgbs.shape[0] == 1:
+            rgbs = rgbs.squeeze(0)
         loss = self.loss(results, rgbs)
 
         with torch.no_grad():
@@ -126,7 +175,7 @@ class NeRFSystem(LightningModule):
         rays, rgbs = batch['rays'], batch['rgbs']
         rays = rays.squeeze() # (H*W, 3)
         rgbs = rgbs.squeeze() # (H*W, 3)
-        results = self(rays)
+        results = self.val_forward(rays)
         log = {'val_loss': self.loss(results, rgbs)}
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
     
