@@ -273,27 +273,34 @@ def render_2d_rays(models,
     def inference(results, model, typ, xyz, z_vals, test_time=False, **kwargs):
         B = xyz.shape[0]
         out_chunks = []
+        
         if typ == 'coarse' and test_time and 'fine' in models:
+            xyz_parts = []
             for i in range(B):
                 part = xyz[i:i+1]
                 _b, _c, _h, _w = part.shape
 
                 part_emb = embedding_xyz(rearrange(part, 'b c h w -> (b h w) c'))
                 part_emb = rearrange(part_emb, '(b h w) c -> b c h w', b=_b, h=_h, w=_w)
-                out_chunks += [model(part_emb, sigma_only=True)]
+                xyz_parts += [part_emb]
+
+            out_chunks += [model(torch.cat(xyz_parts, 0), sigma_only=True)]
             
             out = torch.cat(out_chunks, 0)
             sigmas = rearrange(out, 'b 1 h w -> h w b')
         else:
             dir_embedded = repeat(dir_emb, 'b c h w -> (b B) c h w', B=B)
+            xyz_parts = []
             for i in range(B):
                 part = xyz[i:i+1]
                 _b, _c, _h, _w = part.shape
 
                 part_emb = embedding_xyz(rearrange(part, 'b c h w -> (b h w) c'))
                 part_emb = rearrange(part_emb, '(b h w) c -> b c h w', b=_b, h=_h, w=_w)
-                input_emb = torch.cat([part_emb, dir_embedded[i:i+1]], 1)
-                out_chunks += [model(input_emb, sigma_only=False)]
+                xyz_parts += [part_emb]
+
+            input_emb = torch.cat([torch.cat(xyz_parts, 0), dir_embedded], 1)
+            out_chunks += [model(input_emb, sigma_only=False)]
             
             out = torch.cat(out_chunks, 0)
             out = rearrange(out, 'b c h w -> h w b c')
