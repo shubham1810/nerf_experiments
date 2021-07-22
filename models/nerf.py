@@ -269,7 +269,7 @@ class NeRF2D(nn.Module):
     def __init__(self,
                 K=[3, 3, 1, 3, 1, 1], W=256,
                 in_channels_xyz=63, in_channels_dir=27,
-                skips=[4]
+                skips=[4], bn=[1, 3, 4],
                 ):
         super(NeRF2D, self).__init__()
 
@@ -279,6 +279,7 @@ class NeRF2D(nn.Module):
         self.in_channels_xyz = in_channels_xyz
         self.in_channels_dir = in_channels_dir
         self.skips = skips
+        self.bn = bn
 
         # xyz encoding layers
         for i in range(self.D):
@@ -292,7 +293,11 @@ class NeRF2D(nn.Module):
                 layer = nn.Conv2d(in_channels_xyz+W, W, kern, padding=pad, padding_mode='reflect')
             else:
                 layer = nn.Conv2d(W, W, kern, padding=pad, padding_mode='reflect')
-            layer = nn.Sequential(layer, nn.ReLU(True))
+            
+            if i in bn:
+                layer = nn.Sequential(layer, nn.ReLU(True), nn.BatchNorm2d(W))
+            else:
+                layer = nn.Sequential(layer, nn.ReLU(True))
             setattr(self, f"xyz_encoding_{i+1}", layer)
         
         self.xyz_encoding_final = nn.Conv2d(W, W, 1)
