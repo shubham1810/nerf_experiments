@@ -58,17 +58,17 @@ def sample_pdf2d(bins, weights, N_importance, det=False, eps=1e-5):
         # matrix and it can give error later.
         u = torch.linspace(eps, 1, N_importance, device=bins.device) - eps
         u = u.expand(h_, w_, N_importance)
+        u = u.contiguous()
     else:
         u = torch.rand(h_, w_, N_importance, device=bins.device)
-    
-    u = u.contiguous()
 
     inds = torch.searchsorted(cdf, u, right=True)
     below = torch.clamp_min(inds-1, 0)
-    above = torch.clamp_max(inds, ns)
+    above = torch.clamp_max(inds, ns-1)
 
     inds_sampled = rearrange(torch.stack([below, above], -1), 'h w n2 c -> h w (n2 c)', c=2)
-    cdf_g = rearrange(torch.gather(cdf, 2, inds_sampled), 'h w (n2 c) -> h w n2 c', c=2)
+    gathered = torch.gather(cdf, 2, inds_sampled)
+    cdf_g = rearrange(gathered, 'h w (n2 c) -> h w n2 c', c=2)
     bins_g = rearrange(torch.gather(bins, 2, inds_sampled), 'h w (n2 c) -> h w n2 c', c=2)
 
     denom = cdf_g[..., 1] - cdf_g[..., 0]
