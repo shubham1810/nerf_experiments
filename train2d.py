@@ -23,6 +23,7 @@ from metrics import *
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.loggers import TestTubeLogger
+from pytorch_lightning.plugins import DDPPlugin
 
 
 class NeRFSystem(LightningModule):
@@ -39,13 +40,13 @@ class NeRFSystem(LightningModule):
         self.embeddings = {'xyz': self.embedding_xyz,
                            'dir': self.embedding_dir}
 
-        self.nerf_coarse = NeRF2D()
+        self.nerf_coarse = NeRF2D(bn=[])
         self.models = {'coarse': self.nerf_coarse}
         load_ckpt(self.nerf_coarse, hparams.weight_path, 'nerf_coarse')
 
         if hparams.N_importance > 0:
             # self.nerf_fine = NeRF()
-            self.nerf_fine = NeRF2D()
+            self.nerf_fine = NeRF2D(bn=[])
             self.models['fine'] = self.nerf_fine
             load_ckpt(self.nerf_fine, hparams.weight_path, 'nerf_fine')
 
@@ -122,6 +123,51 @@ class NeRFSystem(LightningModule):
             if 'rgb_fine' in op:
                 results['rgb_fine'] = template_rgb_fine
                 results['depth_fine'] = template_depth_fine
+        elif self.val_dataset.apply_break:
+            # Create a template for the outputs
+            template_rgb_coarse = torch.zeros_like(rays[..., :3])
+            template_rgb_fine = torch.zeros_like(rays[..., :3])
+            template_depth_coarse = torch.zeros_like(rays[..., 0])
+            template_depth_fine = torch.zeros_like(rays[..., 0])
+
+            # Divide the data into tiles
+            for sx in range(self.val_dataset.windows[0]):
+                row_start, row_end = sx*self.val_dataset.img_chunk[1], (sx+1)*self.val_dataset.img_chunk[1]
+                if sx == self.val_dataset.windows[0]-1:
+                    row_end = self.val_dataset.img_wh[1]
+                for sy in range(self.val_dataset.windows[1]):
+                    col_start, col_end = sy*self.val_dataset.img_chunk[0], (sy+1)*self.val_dataset.img_chunk[0]
+                    if sy == self.val_dataset.windows[1]-1:
+                        col_end = self.val_dataset.img_wh[0]
+                    
+                    rays_segment = rays[row_start:row_end, col_start:col_end]
+                    with torch.no_grad():
+                        op = render_2d_rays(self.models,
+                                self.embeddings,
+                                rays_segment,
+                                self.hparams.N_samples,
+                                self.hparams.use_disp,
+                                self.hparams.perturb,
+                                self.hparams.noise_std,
+                                self.hparams.N_importance,
+                                self.hparams.chunk, # chunk size is effective in val mode
+                                self.train_dataset.white_back)
+                    template_rgb_coarse[row_start:row_end, col_start:col_end] = op['rgb_coarse']
+                    template_depth_coarse[row_start:row_end, col_start:col_end] = op['depth_coarse']
+
+                    if 'rgb_fine' in op:
+                        template_rgb_fine[row_start:row_end, col_start:col_end] = op['rgb_fine']
+                        template_depth_fine[row_start:row_end, col_start:col_end] = op['depth_fine']
+
+            # Now fill all these in results
+            results['rgb_coarse'] = template_rgb_coarse
+            results['depth_coarse'] = template_depth_coarse
+            if 'rgb_fine' in op:
+                results['rgb_fine'] = template_rgb_fine
+                results['depth_fine'] = template_depth_fine
+
+
+
         return results
 
     def setup(self, stage):
@@ -142,14 +188,14 @@ class NeRFSystem(LightningModule):
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
                           shuffle=True,
-                          num_workers=4,
+                          num_workers=8,
                           batch_size=self.hparams.batch_size,
                           pin_memory=True)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset,
                           shuffle=False,
-                          num_workers=4,
+                          num_workers=8,
                           batch_size=1, # validate one image (H*W rays) at a time
                           pin_memory=True)
     
@@ -208,7 +254,7 @@ def main(hparams):
                         filename='{epoch:d}',
                         monitor='val/psnr',
                         mode='max',
-                        save_top_k=-1)
+                        save_top_k=1)
 
     logger = TestTubeLogger(save_dir="logs",
                             name=hparams.exp_name,
@@ -224,6 +270,7 @@ def main(hparams):
                       weights_summary=None,
                       progress_bar_refresh_rate=1,
                       gpus=hparams.num_gpus,
+                      plugins=DDPPlugin(find_unused_parameters=False),
                       accelerator='ddp' if hparams.num_gpus>1 else None,
                       num_sanity_val_steps=1,
                       benchmark=True,

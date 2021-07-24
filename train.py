@@ -159,7 +159,7 @@ def main(hparams):
                         filename='{epoch:d}',
                         monitor='val/psnr',
                         mode='max',
-                        save_top_k=-1)
+                        save_top_k=1)
 
     logger = TestTubeLogger(save_dir="logs",
                             name=hparams.exp_name,

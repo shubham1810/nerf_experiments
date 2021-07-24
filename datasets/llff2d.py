@@ -159,7 +159,7 @@ def create_spheric_poses(radius, n_poses=120):
 
 
 class LLFF2DDataset(Dataset):
-    def __init__(self, root_dir, split='train', img_wh=(504, 378), spheric_poses=False, val_num=1, img_chunk=(32, 32), apply_skip=True):
+    def __init__(self, root_dir, split='train', img_wh=(504, 378), spheric_poses=False, val_num=1, img_chunk=(32, 32), apply_skip=False, apply_break=True):
         """
         spheric_poses: whether the images are taken in a spheric inward-facing manner
                        default: False (forward-facing)
@@ -172,6 +172,7 @@ class LLFF2DDataset(Dataset):
         # For making the chunks smaller
         self.img_chunk = img_chunk
         self.apply_skip = apply_skip
+        self.apply_break =apply_break
 
         self.spheric_poses = spheric_poses
         self.val_num = max(1, val_num) # at least 1
@@ -179,6 +180,16 @@ class LLFF2DDataset(Dataset):
 
         # prepare number of skips
         self.skips = (self.img_wh[1] // self.img_chunk[1], self.img_wh[0] // self.img_chunk[0])
+
+        # Logic for tiling the windows
+        self.windows = [self.img_wh[1]//self.img_chunk[1], self.img_wh[0]//self.img_chunk[0]]
+        self.min_window = 12 
+
+        if self.img_wh[1]%self.img_chunk[1] > self.min_window:
+            self.windows[0] = self.windows[0] + 1
+
+        if self.img_wh[0]%self.img_chunk[0] > self.min_window:
+            self.windows[1] = self.windows[1] + 1
 
         self.read_meta()
         self.white_back = False
@@ -270,6 +281,18 @@ class LLFF2DDataset(Dataset):
                     for sx in range(self.skips[0]):
                         for sy in range(self.skips[1]):
                             self.all_rgbs += [img[sx::self.skips[0], sy::self.skips[1]]]
+                elif self.apply_break:
+                    for sx in range(self.windows[0]):
+                        if sx == self.windows[0]-1:
+                            row_chunk = img[sx*self.img_chunk[1]:]
+                        else:
+                            row_chunk = img[sx*self.img_chunk[1]:(sx+1)*self.img_chunk[1]]
+                        for sy in range(self.windows[1]):
+                            if sy == self.windows[1]-1:
+                                col_chunk = row_chunk[:, sy*self.img_chunk[0]:]
+                            else:
+                                col_chunk = row_chunk[:, sy*self.img_chunk[0]:(sy+1)*self.img_chunk[0]]
+                            self.all_rgbs += [col_chunk]
                 else:
                     self.all_rgbs += [img]
                 
@@ -294,6 +317,18 @@ class LLFF2DDataset(Dataset):
                     for sx in range(self.skips[0]):
                         for sy in range(self.skips[1]):
                             self.all_rays += [current_rays[sx::self.skips[0], sy::self.skips[1]]]
+                elif self.apply_break:
+                    for sx in range(self.windows[0]):
+                        if sx == self.windows[0]-1:
+                            row_chunk = current_rays[sx*self.img_chunk[1]:]
+                        else:
+                            row_chunk = current_rays[sx*self.img_chunk[1]:(sx+1)*self.img_chunk[1]]
+                        for sy in range(self.windows[1]):
+                            if sy == self.windows[1]-1:
+                                col_chunk = row_chunk[:, sy*self.img_chunk[0]:]
+                            else:
+                                col_chunk = row_chunk[:, sy*self.img_chunk[0]:(sy+1)*self.img_chunk[0]]
+                            self.all_rays += [col_chunk]
                 else:
                     self.all_rays += [current_rays]
 
