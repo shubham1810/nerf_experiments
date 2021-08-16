@@ -1,7 +1,7 @@
 import torch
 from einops import rearrange, reduce, repeat
 
-__all__ = ['render_rays', 'render_2d_rays']
+__all__ = ['render_rays', 'render_2d_rays', 'render_loss_rays']
 
 
 def sample_pdf(bins, weights, N_importance, det=False, eps=1e-5):
