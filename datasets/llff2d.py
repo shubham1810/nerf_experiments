@@ -183,7 +183,7 @@ class LLFF2DDataset(Dataset):
 
         # Logic for tiling the windows
         self.windows = [self.img_wh[1]//self.img_chunk[1], self.img_wh[0]//self.img_chunk[0]]
-        self.min_window = 12 
+        self.min_window = 16
 
         if self.img_wh[1]%self.img_chunk[1] > self.min_window:
             self.windows[0] = self.windows[0] + 1

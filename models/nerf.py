@@ -6,6 +6,7 @@ import numpy as np
 from torch.nn import Sequential as Seq, Linear, ReLU
 from torch_geometric.nn import MessagePassing
 from torch_geometric.nn import knn_graph
+from einops import rearrange, reduce, repeat
 
 
 class Embedding(nn.Module):
@@ -164,6 +165,29 @@ class DynamicEdgeConv(EdgeConv):
         return super(DynamicEdgeConv, self).forward(x, edge_index)
 
 
+def compute_edges(shape):
+    """
+    [NOTE]: Make sure that the shape is in the form (H x W x B).
+    The batch should be last
+    """
+    # Placeholders for to and from
+    from_ = []
+    to_ = []
+
+    # create index matrix
+    im = np.arange(np.prod(shape)).reshape(shape)
+    from_ += [im[:-1].flatten()]
+    from_ += [im[1:].flatten()]
+    to_ += [im[1:].flatten()]
+    to_ += [im[:-1].flatten()]
+
+    from_ += [im[:, :-1].flatten()]
+    from_ += [im[:, 1:].flatten()]
+    to_ += [im[:, 1:].flatten()]
+    to_ += [im[:, :-1].flatten()]
+    return np.array([np.concatenate(from_, 0), np.concatenate(to_, 0)])
+
+
 class NeRFGraph(nn.Module):
     def __init__(self,
                  D=8, W=256,
@@ -188,7 +212,7 @@ class NeRFGraph(nn.Module):
             if i == 0:
                 layer = nn.Linear(in_channels_xyz, W)
             elif i in skips:
-                layer = nn.Linear(W+in_channels_xyz, W)
+                layer = nn.Linear(W + in_channels_xyz, W)
             else:
                 layer = nn.Linear(W, W)
             layer = nn.Sequential(layer, nn.ReLU(True))
@@ -196,14 +220,13 @@ class NeRFGraph(nn.Module):
         self.xyz_encoding_final = nn.Linear(W, W)
 
         # direction encoding layers
-        self.dir_encoding1 = DynamicEdgeConv(W+in_channels_dir, W//2)
-        self.dir_encoding2 = DynamicEdgeConv(W//2, W//2)
+        self.dir_encoding1 = EdgeConv(W + in_channels_dir, W//2)
+        self.dir_encoding2 = EdgeConv(W//2, W//2)
 
         # output layers
         self.sigma = nn.Linear(W, 1)
-        self.rgb = nn.Sequential(
-                        nn.Linear(W//2, 3),
-                        nn.Sigmoid())
+        self.rgb_graph = EdgeConv(W//2, 3)
+        self.rgb = nn.Sigmoid()
 
     def forward(self, x, sigma_only=False):
         """
@@ -222,6 +245,12 @@ class NeRFGraph(nn.Module):
             else:
                 out: (B, 4), rgb and sigma
         """
+        b, c, h, w = x.shape
+        x = rearrange(x, 'b c h w -> (b h w) c')
+
+        # Compute the edges
+        edge_index = torch.LongTensor(compute_edges(shape=(h, w, b))).to(x.device)
+        
         if not sigma_only:
             input_xyz, input_dir = \
                 torch.split(x, [self.in_channels_xyz, self.in_channels_dir], dim=-1)
@@ -230,26 +259,14 @@ class NeRFGraph(nn.Module):
 
         xyz_ = input_xyz
 
-        # ------------------ Batch edge computation ----------------
-        batches = np.zeros(xyz_.shape[0])
-        t = 0
-        batch_size = 20
-        for ix in range(0, batches.shape[0], batches.shape[0]//batch_size):
-            batches[ix:ix + batches.shape[0]//batch_size] = t
-            t += 1
-        np.random.shuffle(batches)
-        bts = torch.tensor(batches).long().to(xyz_.device)
-        # -----------------------------------------------------------
-
-
-        edge_index = knn_graph(xyz_, k=3, batch=bts, loop=False)
-
         for i in range(self.D):
             if i in self.skips:
                 xyz_ = torch.cat([input_xyz, xyz_], -1)
+                # print(xyz_.shape)
             xyz_ = getattr(self, f"xyz_encoding_{i+1}")(xyz_)
 
         sigma = self.sigma(xyz_)
+        sigma = rearrange(sigma, '(b h w) c -> b c h w', b=b, h=h, w=w)
         if sigma_only:
             return sigma
 
@@ -258,9 +275,11 @@ class NeRFGraph(nn.Module):
         dir_encoding_input = torch.cat([xyz_encoding_final, input_dir], -1)
         dir_encoding = self.dir_encoding1(dir_encoding_input, edge_index)
         dir_encoding = self.dir_encoding2(dir_encoding, edge_index)
-        rgb = self.rgb(dir_encoding)
+        rgb = self.rgb(self.rgb_graph(dir_encoding, edge_index))
 
-        out = torch.cat([rgb, sigma], -1)
+        rgb = rearrange(rgb, '(b h w) c -> b c h w', b=b, h=h, w=w)
+        
+        out = torch.cat([rgb, sigma], 1)
 
         return out
 
@@ -269,7 +288,7 @@ class NeRF2D(nn.Module):
     def __init__(self,
                 K=[3, 3, 1, 1, 3, 3, 1, 1], W=256,
                 in_channels_xyz=63, in_channels_dir=27,
-                skips=[3, 5], bn=[],
+                skips=[], bn=[],
                 ):
         super(NeRF2D, self).__init__()
 
@@ -281,18 +300,21 @@ class NeRF2D(nn.Module):
         self.skips = skips
         self.bn = bn
 
+        # Compute total padding beforehand
+        pad = 0
+        for i in range(self.D):
+            if self.K[i] > 1:
+                pad += self.K[i]//2
+        print("Padding: {}".format(pad))
         # xyz encoding layers
         for i in range(self.D):
             kern = self.K[i]
-            pad = kern//2
-            if kern == 1:
-                pad = 0
             if i == 0:
                 layer = nn.Conv2d(in_channels_xyz, W, kern, padding=pad, padding_mode='reflect')
             elif i in skips:
-                layer = nn.Conv2d(in_channels_xyz+W, W, kern, padding=pad, padding_mode='reflect')
+                layer = nn.Conv2d(in_channels_xyz+W, W, kern)
             else:
-                layer = nn.Conv2d(W, W, kern, padding=pad, padding_mode='reflect')
+                layer = nn.Conv2d(W, W, kern)
             
             if i in bn:
                 layer = nn.Sequential(layer, nn.ReLU(True), nn.BatchNorm2d(W))
@@ -304,9 +326,9 @@ class NeRF2D(nn.Module):
 
         # Direction encoding layers
         self.dir_encoding = nn.Sequential(
-                                    nn.Conv2d(W+in_channels_dir, W, 3, padding=1, padding_mode='reflect'),
+                                    nn.Conv2d(W+in_channels_dir, W, 3, padding=2, padding_mode='reflect'),
                                     nn.ReLU(True),
-                                    nn.Conv2d(W, W//2, 1),
+                                    nn.Conv2d(W, W//2, 3),
                                     nn.ReLU(True),
                                 )
         
@@ -330,6 +352,7 @@ class NeRF2D(nn.Module):
             if i in self.skips:
                 xyz_ = torch.cat([input_xyz, xyz_], 1)
             xyz_ =  getattr(self, f"xyz_encoding_{i+1}")(xyz_)
+            # print(xyz_.shape)
         
         sigma = self.sigma(xyz_)
         if sigma_only:
@@ -337,6 +360,7 @@ class NeRF2D(nn.Module):
         
         xyz_encoding_final = self.xyz_encoding_final(xyz_)
 
+        # print(xyz_encoding_final.shape, input_dir.shape)
         dir_encoding_input = torch.cat([xyz_encoding_final, input_dir], 1)
         dir_encoding = self.dir_encoding(dir_encoding_input)
         rgb = self.rgb(dir_encoding)
