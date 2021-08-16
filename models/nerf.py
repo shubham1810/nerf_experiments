@@ -367,3 +367,169 @@ class NeRF2D(nn.Module):
 
         out = torch.cat([rgb, sigma], 1)
         return out
+
+
+class LossNet(nn.Module):
+    def __init__(self, n_features=8, feature_dims=256, rgb_features=[256, 128], h_dim=128):
+        super().__init__()
+
+        self.n_features = n_features
+        self.feature_dims = feature_dims
+        self.h_dim = h_dim
+        self.rgb_features = rgb_features
+
+        # loss encoding layers
+        for i in range(self.n_features):
+            layer = nn.Sequential(
+                nn.Linear(self.feature_dims, self.h_dim),
+                nn.ReLU(True) 
+            )
+            setattr(self, f"loss_encoding_{i+1}", layer)
+
+        # RGB loss encoding layers
+        for i in range(len(self.rgb_features)):
+            layer = nn.Sequential(
+                nn.Linear(self.rgb_features[i], self.h_dim),
+                nn.ReLU(True) 
+            )
+            setattr(self, f"rgb_loss_encoding_{i+1}", layer)
+        
+        # Final loss prediction layers
+        self.sigma_loss = nn.Linear(self.n_features * self.h_dim, 1)
+        self.rgb_loss = nn.Linear(self.h_dim * (self.n_features + len(self.rgb_features)), 1)
+    
+    def forward(self, features, sigma_only=False):
+        if not sigma_only:
+            features, color_features = features[:self.n_features], features[self.n_features:]
+        else:
+            features = features[:self.n_features]
+
+        
+        loss_outs = []
+        for ix in range(self.n_features):
+            z_loss = getattr(self, f"loss_encoding_{ix+1}")(features[ix])
+            # print(ix, features[ix].shape, z_loss.shape)
+            loss_outs.append(z_loss)
+        
+        loss_interm = torch.cat(loss_outs, 1)
+        # print(loss_interm.shape)
+        sigma_loss_pred = self.sigma_loss(loss_interm)
+
+        if sigma_only:
+            return sigma_loss_pred
+        
+        for i in range(len(self.rgb_features)):
+            c_loss = getattr(self, f"rgb_loss_encoding_{i+1}")(color_features[i])
+            # print(f"rgb_loss_encoding_{i+1}", color_features[i].shape, c_loss.shape)
+            loss_outs.append(c_loss)
+        
+        final_loss_features = torch.cat(loss_outs, 1)
+        # print(final_loss_features.shape)
+        rgb_loss_pred = self.rgb_loss(final_loss_features)
+
+        return sigma_loss_pred, rgb_loss_pred
+
+
+class NeRFLoss(nn.Module):
+    def __init__(self,
+                 D=8, W=256,
+                 in_channels_xyz=63, in_channels_dir=27, 
+                 skips=[4]):
+        """
+        D: number of layers for density (sigma) encoder
+        W: number of hidden units in each layer
+        in_channels_xyz: number of input channels for xyz (3+3*10*2=63 by default)
+        in_channels_dir: number of input channels for direction (3+3*4*2=27 by default)
+        skips: add skip connection in the Dth layer
+        """
+        super(NeRFLoss, self).__init__()
+        self.D = D
+        self.W = W
+        self.in_channels_xyz = in_channels_xyz
+        self.in_channels_dir = in_channels_dir
+        self.skips = skips
+
+        # xyz encoding layers
+        for i in range(D):
+            if i == 0:
+                layer = nn.Linear(in_channels_xyz, W)
+            elif i in skips:
+                layer = nn.Linear(W+in_channels_xyz, W)
+            else:
+                layer = nn.Linear(W, W)
+            layer = nn.Sequential(layer, nn.ReLU(True))
+            setattr(self, f"xyz_encoding_{i+1}", layer)
+        self.xyz_encoding_final = nn.Linear(W, W)
+
+        # direction encoding layers
+        self.dir_encoding = nn.Sequential(
+                                nn.Linear(W+in_channels_dir, W//2),
+                                nn.ReLU(True))
+
+        # output layers
+        self.sigma = nn.Linear(W, 1)
+        self.rgb = nn.Sequential(
+                        nn.Linear(W//2, 3),
+                        nn.Sigmoid())
+        
+        self.pred_loss = LossNet(n_features=D, feature_dims=W, rgb_features=[W, W//2], h_dim=128)
+
+    def forward(self, x, sigma_only=False, loss_grad=False):
+        """
+        Encodes input (xyz+dir) to rgb+sigma (not ready to render yet).
+        For rendering this ray, please see rendering.py
+
+        Inputs:
+            x: (B, self.in_channels_xyz(+self.in_channels_dir))
+               the embedded vector of position and direction
+            sigma_only: whether to infer sigma only. If True,
+                        x is of shape (B, self.in_channels_xyz)
+
+        Outputs:
+            if sigma_ony:
+                sigma: (B, 1) sigma
+            else:
+                out: (B, 4), rgb and sigma
+        """
+        if not sigma_only:
+            input_xyz, input_dir = \
+                torch.split(x, [self.in_channels_xyz, self.in_channels_dir], dim=-1)
+        else:
+            input_xyz = x
+
+        xyz_ = input_xyz
+        features = []
+        for i in range(self.D):
+            if i in self.skips:
+                xyz_ = torch.cat([input_xyz, xyz_], -1)
+            xyz_ = getattr(self, f"xyz_encoding_{i+1}")(xyz_)
+            if loss_grad:
+                features.append(xyz_)
+            else:
+                features.append(xyz_.detach())
+
+        sigma = self.sigma(xyz_)
+        if sigma_only:
+            sigma_loss = self.pred_loss(features, sigma_only=True)
+            return sigma, sigma_loss
+
+        xyz_encoding_final = self.xyz_encoding_final(xyz_)
+        if loss_grad:
+            features.append(xyz_encoding_final)
+        else:
+            features.append(xyz_encoding_final.detach())
+
+        dir_encoding_input = torch.cat([xyz_encoding_final, input_dir], -1)
+        dir_encoding = self.dir_encoding(dir_encoding_input)
+
+        if loss_grad:
+            features.append(dir_encoding)
+        else:
+            features.append(dir_encoding.detach())
+
+        rgb = self.rgb(dir_encoding)
+        sigma_loss, rgb_loss = self.pred_loss(features, sigma_only=False)
+
+        out = torch.cat([rgb, sigma], -1)
+
+        return out, torch.cat([sigma_loss, rgb_loss], -1)
