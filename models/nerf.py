@@ -382,7 +382,8 @@ class LossNet(nn.Module):
         for i in range(self.n_features):
             layer = nn.Sequential(
                 nn.Linear(self.feature_dims, self.h_dim),
-                nn.ReLU(True) 
+                nn.ReLU(True),
+                nn.Dropout(0.21),
             )
             setattr(self, f"loss_encoding_{i+1}", layer)
 
@@ -390,12 +391,11 @@ class LossNet(nn.Module):
         for i in range(len(self.rgb_features)):
             layer = nn.Sequential(
                 nn.Linear(self.rgb_features[i], self.h_dim),
-                nn.ReLU(True) 
+                nn.ReLU(True)
             )
             setattr(self, f"rgb_loss_encoding_{i+1}", layer)
         
         # Final loss prediction layers
-        self.sigma_loss = nn.Linear(self.n_features * self.h_dim, 1)
         self.rgb_loss = nn.Linear(self.h_dim * (self.n_features + len(self.rgb_features)), 1)
     
     def forward(self, features, sigma_only=False):
@@ -411,13 +411,6 @@ class LossNet(nn.Module):
             # print(ix, features[ix].shape, z_loss.shape)
             loss_outs.append(z_loss)
         
-        loss_interm = torch.cat(loss_outs, 1)
-        # print(loss_interm.shape)
-        sigma_loss_pred = self.sigma_loss(loss_interm)
-
-        if sigma_only:
-            return sigma_loss_pred
-        
         for i in range(len(self.rgb_features)):
             c_loss = getattr(self, f"rgb_loss_encoding_{i+1}")(color_features[i])
             # print(f"rgb_loss_encoding_{i+1}", color_features[i].shape, c_loss.shape)
@@ -427,7 +420,7 @@ class LossNet(nn.Module):
         # print(final_loss_features.shape)
         rgb_loss_pred = self.rgb_loss(final_loss_features)
 
-        return sigma_loss_pred, rgb_loss_pred
+        return rgb_loss_pred
 
 
 class NeRFLoss(nn.Module):
@@ -510,8 +503,7 @@ class NeRFLoss(nn.Module):
 
         sigma = self.sigma(xyz_)
         if sigma_only:
-            sigma_loss = self.pred_loss(features, sigma_only=True)
-            return sigma, sigma_loss
+            return sigma
 
         xyz_encoding_final = self.xyz_encoding_final(xyz_)
         if loss_grad:
@@ -528,8 +520,8 @@ class NeRFLoss(nn.Module):
             features.append(dir_encoding.detach())
 
         rgb = self.rgb(dir_encoding)
-        sigma_loss, rgb_loss = self.pred_loss(features, sigma_only=False)
+        rgb_loss = self.pred_loss(features, sigma_only=False)
 
         out = torch.cat([rgb, sigma], -1)
 
-        return out, torch.cat([sigma_loss, rgb_loss], -1)
+        return out, rgb_loss

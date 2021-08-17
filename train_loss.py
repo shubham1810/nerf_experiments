@@ -23,6 +23,7 @@ from metrics import *
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.loggers import TestTubeLogger
+from pytorch_lightning.plugins import DDPPlugin
 
 
 class NeRFSystem(LightningModule):
@@ -118,8 +119,11 @@ class NeRFSystem(LightningModule):
             typ = 'fine' if 'rgb_fine' in results else 'coarse'
             psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
 
+        typ = 'fine' if 'rgb_fine' in results else 'coarse'
+        
         self.log('lr', get_learning_rate(self.optimizer))
         self.log('train/total_loss', loss)
+        self.log('train/pred_loss', results[f'rgb_loss_{typ}'].detach().mean())
         self.log('train/rgb_loss', color_loss)
         self.log('train/learned_loss', llal_loss)
         self.log('train/psnr', psnr_, prog_bar=True)
@@ -137,22 +141,24 @@ class NeRFSystem(LightningModule):
 
         log = {'val_total_loss': loss, 'val_rgb_loss': color_loss, 'val_learned_loss': llal_loss}
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
+
+        log['val_pred_loss'] = results[f'rgb_loss_{typ}'].mean()
     
         if batch_nb == 0:
             W, H = self.hparams.img_wh
             img = results[f'rgb_{typ}'].view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
             img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
+            diff_img = visualize_depth(((img_gt - img)**2).mean(0))
             depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)
 
             # Visualize the loss maps as well
             rgb_loss = visualize_depth(results[f'rgb_loss_{typ}'].view(H, W)) # (3, H, W)
-            depth_loss = visualize_depth(results[f'depth_loss_{typ}'].view(H, W)) # (3, H, W)
 
             stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
-            stack_loss = torch.stack([img_gt, rgb_loss, depth_loss])
+            stack_loss = torch.stack([diff_img, rgb_loss, img])
             self.logger.experiment.add_images('val/GT_pred_depth',
                                                stack, self.global_step)
-            self.logger.experiment.add_images('val/GT_rgbloss_depthloss',
+            self.logger.experiment.add_images('val/GT_rgbloss_pred',
                                                stack_loss, self.global_step)
 
         psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
@@ -163,11 +169,13 @@ class NeRFSystem(LightningModule):
     def validation_epoch_end(self, outputs):
         mean_loss = torch.stack([x['val_total_loss'] for x in outputs]).mean()
         mean_rgb_loss = torch.stack([x['val_rgb_loss'] for x in outputs]).mean()
+        mean_pred_loss = torch.stack([x['val_pred_loss'] for x in outputs]).mean()
         mean_learned_loss = torch.stack([x['val_learned_loss'] for x in outputs]).mean()
 
         mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
 
         self.log('val/total_loss', mean_loss)
+        self.log('val/pred_loss', mean_pred_loss)
         self.log('val/rgb_loss', mean_rgb_loss)
         self.log('val/learned_loss', mean_learned_loss)
         self.log('val/psnr', mean_psnr, prog_bar=True)
@@ -197,6 +205,7 @@ def main(hparams):
                       progress_bar_refresh_rate=1,
                       gpus=hparams.num_gpus,
                       accelerator='ddp' if hparams.num_gpus>1 else None,
+                      plugins=DDPPlugin(find_unused_parameters=False),
                       num_sanity_val_steps=1,
                       benchmark=True,
                       profiler="simple" if hparams.num_gpus==1 else None)

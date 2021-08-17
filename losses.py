@@ -36,18 +36,41 @@ class LearnedLoss(nn.Module):
 def LossPredLoss(input, target, margin=1.0, reduction='mean'):
     assert len(input) % 2 == 0, 'the batch size is not even.'
     assert input.shape == input.flip(0).shape
-    
-    input = (input - input.flip(0))[:len(input)//2] # [l_1 - l_2B, l_2 - l_2B-1, ... , l_B - l_B+1], where batch_size = 2B
-    target = (target - target.flip(0))[:len(target)//2]
     target = target.detach()
 
+    input = (input - input.flip(0))[:len(input)//2] # [l_1 - l_2B, l_2 - l_2B-1, ... , l_B - l_B+1], where batch_size = 2B
+    target = (target - target.flip(0))[:len(target)//2]
+    
     one = 2 * torch.sign(torch.clamp(target, min=0)) - 1 # 1 operation which is defined by the authors
     
     if reduction == 'mean':
-        loss = torch.sum(torch.clamp(margin - one * input, min=0))
+        loss = torch.sum(torch.clamp(margin - one * (input**2), min=0))
         loss = loss / input.size(0) # Note that the size of input is already halved
     elif reduction == 'none':
-        loss = torch.clamp(margin - one * input, min=0)
+        loss = torch.clamp(margin - one * (input**2), min=0)
+    else:
+        NotImplementedError()
+    
+    return loss
+
+
+def LossPredLossScaled(input, target, margin=1.0, reduction='mean'):
+    assert len(input) % 2 == 0, 'the batch size is not even.'
+    assert input.shape == input.flip(0).shape
+    target = target.detach()
+
+    mean_input = input.mean()
+    mean_target = target.mean()
+
+    input = input / input.mean()
+    target = target / target.mean()
+
+    error_term = (target - input)**2 #(mean_target - mean_input)
+    
+    if reduction == 'mean':
+        loss = torch.mean(error_term)
+    elif reduction == 'none':
+        loss = error_term
     else:
         NotImplementedError()
     

@@ -458,15 +458,11 @@ def render_loss_rays(models,
         if typ=='coarse' and test_time and 'fine' in models:
             for i in range(0, B, chunk):
                 xyz_embedded = embedding_xyz(xyz_[i:i+chunk])
-                out_val, out_loss_val = model(xyz_embedded, sigma_only=True)
+                out_val = model(xyz_embedded, sigma_only=True)
                 out_chunks += [out_val]
-                loss_chunks += [out_loss_val]
 
             out = torch.cat(out_chunks, 0)
-            out_loss = torch.cat(loss_chunks, 0)
-
             sigmas = rearrange(out, '(n1 n2) 1 -> n1 n2', n1=N_rays, n2=N_samples_)
-            loss_sigmas = rearrange(out_loss, '(n1 n2) 1 -> n1 n2', n1=N_rays, n2=N_samples_)
         else: # infer rgb and sigma and others
             dir_embedded_ = repeat(dir_embedded, 'n1 c -> (n1 n2) c', n2=N_samples_)
                             # (N_rays*N_samples_, embed_dir_channels)
@@ -483,13 +479,11 @@ def render_loss_rays(models,
 
             # out = out.view(N_rays, N_samples_, 4)
             out = rearrange(out, '(n1 n2) c -> n1 n2 c', n1=N_rays, n2=N_samples_, c=4)
-            out_loss = rearrange(out_loss, '(n1 n2) c -> n1 n2 c', n1=N_rays, n2=N_samples_, c=2)
+            out_loss = rearrange(out_loss, '(n1 n2) c -> n1 n2 c', n1=N_rays, n2=N_samples_, c=1)
 
             rgbs = out[..., :3] # (N_rays, N_samples_, 3)
             sigmas = out[..., 3] # (N_rays, N_samples_)
-
-            sigma_loss = out_loss[..., 0]
-            rgb_loss = out_loss[..., 1]
+            rgb_loss = out_loss[..., 0]
             
         # Convert these values using volume rendering (Section 4)
         deltas = z_vals[:, 1:] - z_vals[:, :-1] # (N_rays, N_samples_-1)
@@ -499,22 +493,16 @@ def render_loss_rays(models,
         # compute alpha by the formula (3)
         noise = torch.randn_like(sigmas) * noise_std
         alphas = 1-torch.exp(-deltas*torch.relu(sigmas+noise)) # (N_rays, N_samples_)
-        # For loss module
-        alpha_loss = 1-torch.exp(-deltas*torch.relu(sigma_loss+noise))
+        
 
         alphas_shifted = \
             torch.cat([torch.ones_like(alphas[:, :1]), 1-alphas+1e-10], -1) # [1, 1-a1, 1-a2, ...]
-        alpha_loss_shifted = \
-            torch.cat([torch.ones_like(alpha_loss[:, :1]), 1-alpha_loss+1e-10], -1)
 
         weights = \
             alphas * torch.cumprod(alphas_shifted[:, :-1], -1) # (N_rays, N_samples_)
-        weight_loss = \
-            alpha_loss * torch.cumprod(alpha_loss_shifted[:, :-1], -1)
         
         weights_sum = reduce(weights, 'n1 n2 -> n1', 'sum') # (N_rays), the accumulated opacity along the rays
                                                             # equals "1 - (1-a1)(1-a2)...(1-an)" mathematically
-        weight_loss_sum = reduce(weight_loss, 'n1 n2 -> n1', 'sum')
 
         # print(reduce(wts, 'n1 n2 -> n1', 'sum'), weights_sum)
 
@@ -522,17 +510,13 @@ def render_loss_rays(models,
         results[f'opacity_{typ}'] = weights_sum
         results[f'z_vals_{typ}'] = z_vals
 
-        results[f'weight_loss_{typ}'] = weight_loss
-        results[f'opacity_loss_{typ}'] = weight_loss_sum
-
         if test_time and typ == 'coarse' and 'fine' in models:
             return
 
         rgb_map = reduce(rearrange(weights, 'n1 n2 -> n1 n2 1')*rgbs, 'n1 n2 c -> n1 c', 'sum')
-        rgb_loss_map = reduce(weight_loss*rgb_loss, 'n1 n2 -> n1', 'sum')
+        rgb_loss_map = reduce(weights.detach()*rgb_loss, 'n1 n2 -> n1', 'sum')
 
         depth_map = reduce(weights*z_vals, 'n1 n2 -> n1', 'sum')
-        depth_loss_map = reduce(weight_loss*z_vals, 'n1 n2 -> n1', 'sum')
 
         if white_back:
             rgb_map += 1-weights_sum.unsqueeze(1)
@@ -541,7 +525,6 @@ def render_loss_rays(models,
         results[f'depth_{typ}'] = depth_map
 
         results[f'rgb_loss_{typ}'] = rgb_loss_map
-        results[f'depth_loss_{typ}'] = depth_loss_map
 
         return
 
