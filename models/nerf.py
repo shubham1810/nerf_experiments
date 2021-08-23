@@ -468,7 +468,7 @@ class NeRFLoss(nn.Module):
         
         self.pred_loss = LossNet(n_features=D, feature_dims=W, rgb_features=[W, W//2], h_dim=128)
 
-    def forward(self, x, sigma_only=False, loss_grad=False):
+    def forward(self, x, sigma_only=False, loss_grad=True):
         """
         Encodes input (xyz+dir) to rgb+sigma (not ready to render yet).
         For rendering this ray, please see rendering.py

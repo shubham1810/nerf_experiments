@@ -34,7 +34,7 @@ class LearnedLoss(nn.Module):
         return rgb_loss, module_loss
 
 
-def LossPredLoss(input, target, margin=0.01, reduction='mean'):
+def LossPredLoss(input, target, margin=0.001, reduction='mean'):
     assert len(input) % 2 == 0, 'the batch size is not even.'
     assert input.shape == input.flip(0).shape
     target = target.detach()
