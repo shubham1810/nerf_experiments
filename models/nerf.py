@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 import numpy as np
 
 # Graph stuff
@@ -418,7 +419,7 @@ class LossNet(nn.Module):
         
         final_loss_features = torch.cat(loss_outs, 1)
         # print(final_loss_features.shape)
-        rgb_loss_pred = self.rgb_loss(final_loss_features)
+        rgb_loss_pred = F.softplus(self.rgb_loss(final_loss_features))
 
         return rgb_loss_pred
 
@@ -467,7 +468,7 @@ class NeRFLoss(nn.Module):
         
         self.pred_loss = LossNet(n_features=D, feature_dims=W, rgb_features=[W, W//2], h_dim=128)
 
-    def forward(self, x, sigma_only=False, loss_grad=True):
+    def forward(self, x, sigma_only=False, loss_grad=False):
         """
         Encodes input (xyz+dir) to rgb+sigma (not ready to render yet).
         For rendering this ray, please see rendering.py

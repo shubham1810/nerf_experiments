@@ -113,7 +113,11 @@ class NeRFSystem(LightningModule):
         results = self(rays)
 
         color_loss, llal_loss = self.loss(results, rgbs)
-        loss = color_loss + llal_loss
+
+        if self.current_epoch > 5:
+            loss = color_loss + llal_loss
+        else:
+            loss = color_loss
 
         with torch.no_grad():
             typ = 'fine' if 'rgb_fine' in results else 'coarse'
@@ -205,7 +209,7 @@ def main(hparams):
                       progress_bar_refresh_rate=1,
                       gpus=hparams.num_gpus,
                       accelerator='ddp' if hparams.num_gpus>1 else None,
-                      plugins=DDPPlugin(find_unused_parameters=False),
+                      plugins=DDPPlugin(find_unused_parameters=True),
                       num_sanity_val_steps=1,
                       benchmark=True,
                       profiler="simple" if hparams.num_gpus==1 else None)

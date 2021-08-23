@@ -1,5 +1,6 @@
 from torch import nn
 import torch
+import torch.nn.functional as F
 
 class ColorLoss(nn.Module):
     def __init__(self, coef=1):
@@ -33,7 +34,7 @@ class LearnedLoss(nn.Module):
         return rgb_loss, module_loss
 
 
-def LossPredLoss(input, target, margin=1.0, reduction='mean'):
+def LossPredLoss(input, target, margin=0.01, reduction='mean'):
     assert len(input) % 2 == 0, 'the batch size is not even.'
     assert input.shape == input.flip(0).shape
     target = target.detach()
@@ -44,10 +45,10 @@ def LossPredLoss(input, target, margin=1.0, reduction='mean'):
     one = 2 * torch.sign(torch.clamp(target, min=0)) - 1 # 1 operation which is defined by the authors
     
     if reduction == 'mean':
-        loss = torch.sum(torch.clamp(margin - one * (input**2), min=0))
+        loss = torch.sum(torch.clamp(margin - one * (input), min=0)) + torch.sum(F.mse_loss(input, target, size_average='none'))
         loss = loss / input.size(0) # Note that the size of input is already halved
     elif reduction == 'none':
-        loss = torch.clamp(margin - one * (input**2), min=0)
+        loss = torch.clamp(margin - one * (input), min=0)
     else:
         NotImplementedError()
     
