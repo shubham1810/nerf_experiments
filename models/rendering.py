@@ -1,5 +1,6 @@
 import torch
 from einops import rearrange, reduce, repeat
+import torch.nn.functional as F
 
 __all__ = ['render_rays', 'render_2d_rays', 'render_loss_rays']
 
@@ -454,7 +455,6 @@ def render_loss_rays(models,
         # Perform model inference to get rgb and raw sigma
         B = xyz_.shape[0]
         out_chunks = []
-        loss_chunks = []
         if typ=='coarse' and test_time and 'fine' in models:
             for i in range(0, B, chunk):
                 xyz_embedded = embedding_xyz(xyz_[i:i+chunk])
@@ -470,20 +470,17 @@ def render_loss_rays(models,
                 xyz_embedded = embedding_xyz(xyz_[i:i+chunk])
                 xyzdir_embedded = torch.cat([xyz_embedded,
                                              dir_embedded_[i:i+chunk]], 1)
-                out_val, out_loss_val = model(xyzdir_embedded, sigma_only=False)
+                out_val = model(xyzdir_embedded, sigma_only=False)
                 out_chunks += [out_val]
-                loss_chunks += [out_loss_val]
 
             out = torch.cat(out_chunks, 0)
-            out_loss = torch.cat(loss_chunks, 0)
 
             # out = out.view(N_rays, N_samples_, 4)
             out = rearrange(out, '(n1 n2) c -> n1 n2 c', n1=N_rays, n2=N_samples_, c=4)
-            out_loss = rearrange(out_loss, '(n1 n2) c -> n1 n2 c', n1=N_rays, n2=N_samples_, c=1)
 
             rgbs = out[..., :3] # (N_rays, N_samples_, 3)
-            sigmas = out[..., 3] # (N_rays, N_samples_)
-            rgb_loss = out_loss[..., 0]
+            betas = F.softplus(out[..., 3]) + 0.001
+            sigmas = out[..., 4] # (N_rays, N_samples_)
             
         # Convert these values using volume rendering (Section 4)
         deltas = z_vals[:, 1:] - z_vals[:, :-1] # (N_rays, N_samples_-1)
@@ -514,7 +511,7 @@ def render_loss_rays(models,
             return
 
         rgb_map = reduce(rearrange(weights, 'n1 n2 -> n1 n2 1')*rgbs, 'n1 n2 c -> n1 c', 'sum')
-        rgb_loss_map = reduce(weights.detach()*rgb_loss, 'n1 n2 -> n1', 'sum')
+        betas_map = reduce(weights.detach()*betas, 'n1 n2 -> n1', 'sum')
 
         depth_map = reduce(weights*z_vals, 'n1 n2 -> n1', 'sum')
 
@@ -524,7 +521,7 @@ def render_loss_rays(models,
         results[f'rgb_{typ}'] = rgb_map
         results[f'depth_{typ}'] = depth_map
 
-        results[f'rgb_loss_{typ}'] = rgb_loss_map
+        results[f'rgb_beta_{typ}'] = betas_map
 
         return
 

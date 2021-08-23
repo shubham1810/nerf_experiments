@@ -34,6 +34,27 @@ class LearnedLoss(nn.Module):
         return rgb_loss, module_loss
 
 
+class UncertainLoss(nn.Module):
+    def __init__(self, coef=1):
+        super().__init__()
+        self.coef = coef
+        self.loss = nn.MSELoss(reduction='none')
+
+    def forward(self, inputs, targets):
+        coarse_loss = self.loss(inputs['rgb_coarse'], targets).mean(-1)
+        beta_squared = inputs['rgb_beta_coarse'] ** 2
+        rgb_loss = coarse_loss.mean() / (2 *  beta_squared.mean())
+        rgb_loss += torch.mean(0.5 * torch.log(beta_squared))
+
+        if 'rgb_fine' in inputs:
+            fine_loss = self.loss(inputs['rgb_fine'], targets).mean(-1)
+            beta_squared = inputs['rgb_beta_fine'] ** 2
+            rgb_loss += self.coef * fine_loss.mean() / (2 *  beta_squared.mean())
+            rgb_loss += torch.mean(0.5 * torch.log(beta_squared))
+
+        return rgb_loss
+
+
 def LossPredLoss(input, target, margin=0.001, reduction='mean'):
     assert len(input) % 2 == 0, 'the batch size is not even.'
     assert input.shape == input.flip(0).shape
@@ -77,4 +98,4 @@ def LossPredLossScaled(input, target, margin=1.0, reduction='mean'):
     
     return loss
 
-loss_dict = {'color': ColorLoss, 'llal': LearnedLoss}
+loss_dict = {'color': ColorLoss, 'llal': LearnedLoss, 'uncertainty': UncertainLoss}

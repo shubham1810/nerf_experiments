@@ -33,7 +33,7 @@ class NeRFSystem(LightningModule):
 
         # print("Hyperparameters:", self.hparams)
 
-        self.loss = loss_dict['llal'](coef=1)
+        self.loss = loss_dict['uncertainty'](coef=1)
 
         self.embedding_xyz = Embedding(3, 10)
         self.embedding_dir = Embedding(3, 4)
@@ -112,12 +112,7 @@ class NeRFSystem(LightningModule):
         rays, rgbs = batch['rays'], batch['rgbs']
         results = self(rays)
 
-        color_loss, llal_loss = self.loss(results, rgbs)
-
-        if self.current_epoch > 5:
-            loss = color_loss + llal_loss
-        else:
-            loss = color_loss
+        loss = self.loss(results, rgbs)
 
         with torch.no_grad():
             typ = 'fine' if 'rgb_fine' in results else 'coarse'
@@ -127,9 +122,7 @@ class NeRFSystem(LightningModule):
         
         self.log('lr', get_learning_rate(self.optimizer))
         self.log('train/total_loss', loss)
-        self.log('train/pred_loss', results[f'rgb_loss_{typ}'].detach().mean())
-        self.log('train/rgb_loss', color_loss)
-        self.log('train/learned_loss', llal_loss)
+        self.log('train/betas', results[f'rgb_beta_{typ}'].detach().mean())
         self.log('train/psnr', psnr_, prog_bar=True)
 
         return loss
@@ -140,13 +133,12 @@ class NeRFSystem(LightningModule):
         rgbs = rgbs.squeeze() # (H*W, 3)
         results = self(rays)
 
-        color_loss, llal_loss = self.loss(results, rgbs)
-        loss = color_loss + llal_loss
+        loss = self.loss(results, rgbs)
 
-        log = {'val_total_loss': loss, 'val_rgb_loss': color_loss, 'val_learned_loss': llal_loss}
+        log = {'val_total_loss': loss}
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
 
-        log['val_pred_loss'] = results[f'rgb_loss_{typ}'].mean()
+        log['val_betas'] = results[f'rgb_beta_{typ}'].mean()
     
         if batch_nb == 0:
             W, H = self.hparams.img_wh
@@ -156,10 +148,10 @@ class NeRFSystem(LightningModule):
             depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)
 
             # Visualize the loss maps as well
-            rgb_loss = visualize_depth(results[f'rgb_loss_{typ}'].view(H, W)) # (3, H, W)
+            betas_viz = visualize_depth(results[f'rgb_beta_{typ}'].view(H, W)) # (3, H, W)
 
             stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
-            stack_loss = torch.stack([diff_img, rgb_loss, img])
+            stack_loss = torch.stack([diff_img, betas_viz, img])
             self.logger.experiment.add_images('val/GT_pred_depth',
                                                stack, self.global_step)
             self.logger.experiment.add_images('val/GT_rgbloss_pred',
@@ -172,16 +164,12 @@ class NeRFSystem(LightningModule):
 
     def validation_epoch_end(self, outputs):
         mean_loss = torch.stack([x['val_total_loss'] for x in outputs]).mean()
-        mean_rgb_loss = torch.stack([x['val_rgb_loss'] for x in outputs]).mean()
-        mean_pred_loss = torch.stack([x['val_pred_loss'] for x in outputs]).mean()
-        mean_learned_loss = torch.stack([x['val_learned_loss'] for x in outputs]).mean()
+        mean_betas = torch.stack([x['val_betas'] for x in outputs]).mean()
 
         mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
 
         self.log('val/total_loss', mean_loss)
-        self.log('val/pred_loss', mean_pred_loss)
-        self.log('val/rgb_loss', mean_rgb_loss)
-        self.log('val/learned_loss', mean_learned_loss)
+        self.log('val/betas', mean_betas)
         self.log('val/psnr', mean_psnr, prog_bar=True)
 
 

@@ -463,12 +463,12 @@ class NeRFLoss(nn.Module):
         # output layers
         self.sigma = nn.Linear(W, 1)
         self.rgb = nn.Sequential(
-                        nn.Linear(W//2, 3),
+                        nn.Linear(W//2, 3+1), # 3+1 for RGB and uncertainty
                         nn.Sigmoid())
         
-        self.pred_loss = LossNet(n_features=D, feature_dims=W, rgb_features=[W, W//2], h_dim=128)
+        # self.pred_loss = LossNet(n_features=D, feature_dims=W, rgb_features=[W, W//2], h_dim=128)
 
-    def forward(self, x, sigma_only=False, loss_grad=True):
+    def forward(self, x, sigma_only=False):
         """
         Encodes input (xyz+dir) to rgb+sigma (not ready to render yet).
         For rendering this ray, please see rendering.py
@@ -497,32 +497,19 @@ class NeRFLoss(nn.Module):
             if i in self.skips:
                 xyz_ = torch.cat([input_xyz, xyz_], -1)
             xyz_ = getattr(self, f"xyz_encoding_{i+1}")(xyz_)
-            if loss_grad:
-                features.append(xyz_)
-            else:
-                features.append(xyz_.detach())
 
         sigma = self.sigma(xyz_)
         if sigma_only:
             return sigma
 
         xyz_encoding_final = self.xyz_encoding_final(xyz_)
-        if loss_grad:
-            features.append(xyz_encoding_final)
-        else:
-            features.append(xyz_encoding_final.detach())
 
         dir_encoding_input = torch.cat([xyz_encoding_final, input_dir], -1)
         dir_encoding = self.dir_encoding(dir_encoding_input)
 
-        if loss_grad:
-            features.append(dir_encoding)
-        else:
-            features.append(dir_encoding.detach())
 
-        rgb = self.rgb(dir_encoding)
-        rgb_loss = self.pred_loss(features, sigma_only=False)
+        rgb_beta = self.rgb(dir_encoding)
 
-        out = torch.cat([rgb, sigma], -1)
+        out = torch.cat([rgb_beta, sigma], -1)
 
-        return out, rgb_loss
+        return out
