@@ -42,15 +42,15 @@ class UncertainLoss(nn.Module):
 
     def forward(self, inputs, targets):
         coarse_loss = self.loss(inputs['rgb_coarse'], targets).mean(-1)
-        beta_squared = inputs['rgb_beta_coarse'] ** 2
-        rgb_loss = coarse_loss.mean() / (2 *  beta_squared.mean())
-        rgb_loss += torch.mean(0.5 * torch.log(beta_squared))
+        beta_val = inputs['rgb_beta_coarse']
+        rgb_loss = coarse_loss.mean() / (2 *  (beta_val**2).mean())
+        rgb_loss += torch.mean(0.5 * (torch.log(beta_val)**2))
 
         if 'rgb_fine' in inputs:
             fine_loss = self.loss(inputs['rgb_fine'], targets).mean(-1)
-            beta_squared = inputs['rgb_beta_fine'] ** 2
-            rgb_loss += self.coef * fine_loss.mean() / (2 *  beta_squared.mean())
-            rgb_loss += torch.mean(0.5 * torch.log(beta_squared))
+            beta_val = inputs['rgb_beta_fine'] ** 2
+            rgb_loss += self.coef * fine_loss.mean() / (2 *  (beta_val**2).mean())
+            rgb_loss += torch.mean(0.5 * (torch.log(beta_val)**2))
 
         return rgb_loss
 

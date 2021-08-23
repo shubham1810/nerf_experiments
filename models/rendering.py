@@ -476,7 +476,7 @@ def render_loss_rays(models,
             out = torch.cat(out_chunks, 0)
 
             # out = out.view(N_rays, N_samples_, 4)
-            out = rearrange(out, '(n1 n2) c -> n1 n2 c', n1=N_rays, n2=N_samples_, c=4)
+            out = rearrange(out, '(n1 n2) c -> n1 n2 c', n1=N_rays, n2=N_samples_, c=5)
 
             rgbs = out[..., :3] # (N_rays, N_samples_, 3)
             betas = F.softplus(out[..., 3]) + 0.001
