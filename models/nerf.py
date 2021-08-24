@@ -511,10 +511,10 @@ class NeRFLoss(nn.Module):
         rgbs = self.rgb(dir_encoding)
 
         alpha, beta, gamma, nu = rgbs[..., 0:3], rgbs[..., 3:6], rgbs[..., 6:9], rgbs[..., 9:]
-        gamma = F.sigmoid(gamma)
-        nu = F.softplus(nu) + 1e-05
+        gamma = torch.sigmoid(gamma)
+        nu = F.softplus(nu) + 0.2
         beta = F.softplus(beta) + 1e-05
-        alpha = F.softplus(alpha) + 1.0
+        alpha = F.softplus(alpha) + 1.001
 
         out = torch.cat([alpha, beta, gamma, nu, sigma], -1)
 

@@ -59,7 +59,7 @@ class EvidentialLoss(nn.Module):
     def __init__(self, coef=1):
         super().__init__()
         self.coef = coef
-        self.lam = 1.0
+        self.lam = 2.0
         self.loss = nn.MSELoss(reduction='none')
 
     def forward(self, inputs, targets):

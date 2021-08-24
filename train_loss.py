@@ -120,13 +120,13 @@ class NeRFSystem(LightningModule):
 
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
 
-        aleatoric = results[f'rgb_beta_{typ}'].detach() / (results[f'rgb_alphaa_{typ}'].detach() - 1)
+        aleatoric = results[f'rgb_beta_{typ}'].detach() / (results[f'rgb_alpha_{typ}'].detach() - 1)
         epistemic = aleatoric / results[f'rgb_nu_{typ}'].detach()
         
         self.log('lr', get_learning_rate(self.optimizer))
         self.log('train/total_loss', loss)
-        self.log('train/aleatoric', aleatoric.mean())
-        self.log('train/epistemic', epistemic.mean())
+        self.log('train/aleatoric', aleatoric.mean(), prog_bar=True)
+        self.log('train/epistemic', epistemic.mean(), prog_bar=True)
         self.log('train/psnr', psnr_, prog_bar=True)
 
         return loss
@@ -142,7 +142,7 @@ class NeRFSystem(LightningModule):
         log = {'val_total_loss': loss}
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
 
-        aleatoric = results[f'rgb_beta_{typ}'] / (results[f'rgb_alphaa_{typ}'] - 1)
+        aleatoric = results[f'rgb_beta_{typ}'] / (results[f'rgb_alpha_{typ}'] - 1)
         epistemic = aleatoric / results[f'rgb_nu_{typ}']
 
         log['val_aleatoric'] = aleatoric.mean()
@@ -158,8 +158,8 @@ class NeRFSystem(LightningModule):
             # Visualize the loss maps as well
             # betas_viz = visualize_depth(results[f'rgb_beta_{typ}'].view(H, W)) # (3, H, W)
 
-            aleatoric = aleatoric.view(H, W, 3).transpose(1, 2).transpose(0, 1)
-            epistemic = epistemic.view(H, W, 3).transpose(1, 2).transpose(0, 1)
+            aleatoric = normalise_image(aleatoric.view(H, W, 3).cpu())
+            epistemic = normalise_image(epistemic.view(H, W, 3).cpu())
 
             stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
             stack_loss = torch.stack([diff_img, aleatoric, epistemic])
@@ -210,7 +210,7 @@ def main(hparams):
                       progress_bar_refresh_rate=1,
                       gpus=hparams.num_gpus,
                       accelerator='ddp' if hparams.num_gpus>1 else None,
-                      plugins=DDPPlugin(find_unused_parameters=True),
+                      plugins=DDPPlugin(find_unused_parameters=False),
                       num_sanity_val_steps=1,
                       benchmark=True,
                       profiler="simple" if hparams.num_gpus==1 else None)
