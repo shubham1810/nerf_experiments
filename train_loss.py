@@ -33,7 +33,7 @@ class NeRFSystem(LightningModule):
 
         # print("Hyperparameters:", self.hparams)
 
-        self.loss = loss_dict['uncertainty'](coef=1)
+        self.loss = loss_dict['evidential'](coef=1)
 
         self.embedding_xyz = Embedding(3, 10)
         self.embedding_dir = Embedding(3, 4)
@@ -119,10 +119,14 @@ class NeRFSystem(LightningModule):
             psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
 
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
+
+        aleatoric = results[f'rgb_beta_{typ}'].detach() / (results[f'rgb_alphaa_{typ}'].detach() - 1)
+        epistemic = aleatoric / results[f'rgb_nu_{typ}'].detach()
         
         self.log('lr', get_learning_rate(self.optimizer))
         self.log('train/total_loss', loss)
-        self.log('train/betas', results[f'rgb_beta_{typ}'].detach().mean())
+        self.log('train/aleatoric', aleatoric.mean())
+        self.log('train/epistemic', epistemic.mean())
         self.log('train/psnr', psnr_, prog_bar=True)
 
         return loss
@@ -138,7 +142,11 @@ class NeRFSystem(LightningModule):
         log = {'val_total_loss': loss}
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
 
-        log['val_betas'] = results[f'rgb_beta_{typ}'].mean()
+        aleatoric = results[f'rgb_beta_{typ}'] / (results[f'rgb_alphaa_{typ}'] - 1)
+        epistemic = aleatoric / results[f'rgb_nu_{typ}']
+
+        log['val_aleatoric'] = aleatoric.mean()
+        log['val_epistemic'] = epistemic.mean()
     
         if batch_nb == 0:
             W, H = self.hparams.img_wh
@@ -148,10 +156,13 @@ class NeRFSystem(LightningModule):
             depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)
 
             # Visualize the loss maps as well
-            betas_viz = visualize_depth(results[f'rgb_beta_{typ}'].view(H, W)) # (3, H, W)
+            # betas_viz = visualize_depth(results[f'rgb_beta_{typ}'].view(H, W)) # (3, H, W)
+
+            aleatoric = aleatoric.view(H, W, 3).transpose(1, 2).transpose(0, 1)
+            epistemic = epistemic.view(H, W, 3).transpose(1, 2).transpose(0, 1)
 
             stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
-            stack_loss = torch.stack([diff_img, betas_viz, img])
+            stack_loss = torch.stack([diff_img, aleatoric, epistemic])
             self.logger.experiment.add_images('val/GT_pred_depth',
                                                stack, self.global_step)
             self.logger.experiment.add_images('val/GT_rgbloss_pred',
@@ -164,12 +175,14 @@ class NeRFSystem(LightningModule):
 
     def validation_epoch_end(self, outputs):
         mean_loss = torch.stack([x['val_total_loss'] for x in outputs]).mean()
-        mean_betas = torch.stack([x['val_betas'] for x in outputs]).mean()
+        mean_aleatoric = torch.stack([x['val_aleatoric'] for x in outputs]).mean()
+        mean_epistemic = torch.stack([x['val_epistemic'] for x in outputs]).mean()
 
         mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
 
         self.log('val/total_loss', mean_loss)
-        self.log('val/betas', mean_betas)
+        self.log('val/aleatoric', mean_aleatoric)
+        self.log('val/epistemic', mean_epistemic)
         self.log('val/psnr', mean_psnr, prog_bar=True)
 
 

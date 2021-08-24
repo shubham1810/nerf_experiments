@@ -1,6 +1,7 @@
 from torch import nn
 import torch
 import torch.nn.functional as F
+import numpy as np
 
 class ColorLoss(nn.Module):
     def __init__(self, coef=1):
@@ -54,6 +55,41 @@ class UncertainLoss(nn.Module):
 
         return rgb_loss
 
+class EvidentialLoss(nn.Module):
+    def __init__(self, coef=1):
+        super().__init__()
+        self.coef = coef
+        self.lam = 1.0
+        self.loss = nn.MSELoss(reduction='none')
+
+    def forward(self, inputs, targets):
+        alpha, beta, gamma, v = inputs['rgb_alpha_coarse'], inputs['rgb_beta_coarse'], inputs['rgb_coarse'], inputs['rgb_nu_coarse']
+        rgb_loss = NIG_NLL(targets, gamma, v, alpha, beta) + self.lam*NIG_Reg(targets, gamma, v, alpha, beta)
+
+        if 'rgb_fine' in inputs:
+            alpha, beta, gamma, v = inputs['rgb_alpha_fine'], inputs['rgb_beta_fine'], inputs['rgb_fine'], inputs['rgb_nu_fine']
+            rgb_loss += NIG_NLL(targets, gamma, v, alpha, beta) + self.lam*NIG_Reg(targets, gamma, v, alpha, beta)
+
+        return rgb_loss
+
+def NIG_NLL(y_true, gamma, v, alpha, beta):
+    twoBLambda = 2 * beta * (1 + v)
+
+    nll = 0.5 * torch.log(np.pi/v) \
+        - alpha*torch.log(twoBLambda) \
+        + (alpha + 0.5) * torch.log(v * (y_true - gamma)**2 + twoBLambda) \
+        + torch.lgamma(alpha) \
+        - torch.lgamma(alpha + 0.5)
+    
+    return torch.mean(nll)
+
+def NIG_Reg(y_true, gamma, v, alpha, beta):
+    error = torch.abs(y_true - gamma)
+    evi = 2*v + alpha
+    reg = error * evi
+
+    return torch.mean(reg)
+
 
 def LossPredLoss(input, target, margin=0.001, reduction='mean'):
     assert len(input) % 2 == 0, 'the batch size is not even.'
@@ -98,4 +134,9 @@ def LossPredLossScaled(input, target, margin=1.0, reduction='mean'):
     
     return loss
 
-loss_dict = {'color': ColorLoss, 'llal': LearnedLoss, 'uncertainty': UncertainLoss}
+loss_dict = {
+            'color': ColorLoss, 
+            'llal': LearnedLoss, 
+            'uncertainty': UncertainLoss,
+            'evidential': EvidentialLoss
+            }

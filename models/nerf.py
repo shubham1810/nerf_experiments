@@ -463,8 +463,8 @@ class NeRFLoss(nn.Module):
         # output layers
         self.sigma = nn.Linear(W, 1)
         self.rgb = nn.Sequential(
-                        nn.Linear(W//2, 3+1), # 3+1 for RGB and uncertainty
-                        nn.Sigmoid())
+                        nn.Linear(W//2, 3*4), # 3*4 for RGB and uncertainty elements (alpha, beta, gamma, nu)
+                        )
         
         # self.pred_loss = LossNet(n_features=D, feature_dims=W, rgb_features=[W, W//2], h_dim=128)
 
@@ -508,8 +508,14 @@ class NeRFLoss(nn.Module):
         dir_encoding = self.dir_encoding(dir_encoding_input)
 
 
-        rgb_beta = self.rgb(dir_encoding)
+        rgbs = self.rgb(dir_encoding)
 
-        out = torch.cat([rgb_beta, sigma], -1)
+        alpha, beta, gamma, nu = rgbs[..., 0:3], rgbs[..., 3:6], rgbs[..., 6:9], rgbs[..., 9:]
+        gamma = F.sigmoid(gamma)
+        nu = F.softplus(nu) + 1e-05
+        beta = F.softplus(beta) + 1e-05
+        alpha = F.softplus(alpha) + 1.0
+
+        out = torch.cat([alpha, beta, gamma, nu, sigma], -1)
 
         return out
