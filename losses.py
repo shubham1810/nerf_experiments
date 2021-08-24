@@ -34,7 +34,7 @@ class LearnedLoss(nn.Module):
         return rgb_loss, module_loss
 
 
-def LossPredLoss(input, target, margin=0.001, reduction='mean'):
+def LossPredLoss(input, target, margin=0.0003, reduction='mean'):
     assert len(input) % 2 == 0, 'the batch size is not even.'
     assert input.shape == input.flip(0).shape
     target = target.detach()
@@ -45,7 +45,7 @@ def LossPredLoss(input, target, margin=0.001, reduction='mean'):
     one = 2 * torch.sign(torch.clamp(target, min=0)) - 1 # 1 operation which is defined by the authors
     
     if reduction == 'mean':
-        loss = torch.sum(torch.clamp(margin - one * (input), min=0)) + torch.sum(F.mse_loss(input, target, size_average='none'))
+        loss = torch.sum(torch.clamp(margin - one * (input), min=0)) #+ torch.sum(F.mse_loss(input, target, size_average='none'))
         loss = loss / input.size(0) # Note that the size of input is already halved
     elif reduction == 'none':
         loss = torch.clamp(margin - one * (input), min=0)

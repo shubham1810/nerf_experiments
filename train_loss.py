@@ -114,7 +114,7 @@ class NeRFSystem(LightningModule):
 
         color_loss, llal_loss = self.loss(results, rgbs)
 
-        if self.current_epoch > 5:
+        if self.current_epoch > 2:
             loss = color_loss + llal_loss
         else:
             loss = color_loss
