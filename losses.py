@@ -55,6 +55,42 @@ class UncertainLoss(nn.Module):
 
         return rgb_loss
 
+# class EvidentialLoss(nn.Module):
+#     def __init__(self, coef=1):
+#         super().__init__()
+#         self.coef = coef
+#         self.lam = 2.0
+#         self.loss = nn.MSELoss(reduction='none')
+
+#     def forward(self, inputs, targets):
+#         alpha, beta, gamma, v = inputs['rgb_alpha_coarse'], inputs['rgb_beta_coarse'], inputs['rgb_coarse'], inputs['rgb_nu_coarse']
+#         rgb_loss = NIG_NLL(targets, gamma, v, alpha, beta) + self.lam*NIG_Reg(targets, gamma, v, alpha, beta)
+
+#         if 'rgb_fine' in inputs:
+#             alpha, beta, gamma, v = inputs['rgb_alpha_fine'], inputs['rgb_beta_fine'], inputs['rgb_fine'], inputs['rgb_nu_fine']
+#             rgb_loss += NIG_NLL(targets, gamma, v, alpha, beta) + self.lam*NIG_Reg(targets, gamma, v, alpha, beta)
+
+#         return rgb_loss
+
+# def NIG_NLL(y_true, gamma, v, alpha, beta):
+#     twoBLambda = 2 * beta * (1 + v)
+
+#     nll = 0.5 * torch.log(np.pi/v) \
+#         - alpha*torch.log(twoBLambda) \
+#         + (alpha + 0.5) * torch.log(v * (y_true - gamma)**2 + twoBLambda) \
+#         + torch.lgamma(alpha) \
+#         - torch.lgamma(alpha + 0.5)
+    
+#     return torch.mean(nll)
+
+# def NIG_Reg(y_true, gamma, v, alpha, beta):
+#     error = torch.abs(y_true - gamma)
+#     evi = 2*v + alpha
+#     reg = error * evi
+
+#     return torch.mean(reg)
+
+
 class EvidentialLoss(nn.Module):
     def __init__(self, coef=1):
         super().__init__()
@@ -63,32 +99,26 @@ class EvidentialLoss(nn.Module):
         self.loss = nn.MSELoss(reduction='none')
 
     def forward(self, inputs, targets):
-        alpha, beta, gamma, v = inputs['rgb_alpha_coarse'], inputs['rgb_beta_coarse'], inputs['rgb_coarse'], inputs['rgb_nu_coarse']
-        rgb_loss = NIG_NLL(targets, gamma, v, alpha, beta) + self.lam*NIG_Reg(targets, gamma, v, alpha, beta)
+        mu, l, v = inputs['rgb_coarse'], inputs['rgb_l_coarse'], inputs['rgb_v_coarse']
+        rgb_loss = NIG_NLL(targets, mu, l, v)
 
         if 'rgb_fine' in inputs:
-            alpha, beta, gamma, v = inputs['rgb_alpha_fine'], inputs['rgb_beta_fine'], inputs['rgb_fine'], inputs['rgb_nu_fine']
-            rgb_loss += NIG_NLL(targets, gamma, v, alpha, beta) + self.lam*NIG_Reg(targets, gamma, v, alpha, beta)
+            mu, l, v = inputs['rgb_fine'], inputs['rgb_l_fine'], inputs['rgb_v_fine']
+            rgb_loss += NIG_NLL(targets, mu, l, v)
 
         return rgb_loss
 
-def NIG_NLL(y_true, gamma, v, alpha, beta):
-    twoBLambda = 2 * beta * (1 + v)
+def NIG_NLL(y_true, mu, l, v, r=1.0):
+    error = (y_true - mu)**2
+    error = error.mean(-1).view(-1, 1)
 
-    nll = 0.5 * torch.log(np.pi/v) \
-        - alpha*torch.log(twoBLambda) \
-        + (alpha + 0.5) * torch.log(v * (y_true - gamma)**2 + twoBLambda) \
-        + torch.lgamma(alpha) \
-        - torch.lgamma(alpha + 0.5)
-    
+    nll = torch.lgamma((v - 1 + 1)/2) \
+        - torch.lgamma((v + 1)/2) \
+        + 0.5 * torch.log(r + v) \
+        - v*l \
+        + 0.5 * (v + 1) * torch.log(torch.abs(l**2 + (error/(r + v))))
+
     return torch.mean(nll)
-
-def NIG_Reg(y_true, gamma, v, alpha, beta):
-    error = torch.abs(y_true - gamma)
-    evi = 2*v + alpha
-    reg = error * evi
-
-    return torch.mean(reg)
 
 
 def LossPredLoss(input, target, margin=0.001, reduction='mean'):

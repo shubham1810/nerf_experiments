@@ -120,8 +120,10 @@ class NeRFSystem(LightningModule):
 
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
 
-        aleatoric = results[f'rgb_beta_{typ}'].detach() / (results[f'rgb_alpha_{typ}'].detach() - 1)
-        epistemic = aleatoric / results[f'rgb_nu_{typ}'].detach()
+        v_val = results[f'rgb_v_{typ}'].detach()
+        l_val = results[f'rgb_l_{typ}'].detach()
+        aleatoric = (v_val / (v_val - 2)) * (l_val**2)
+        epistemic = aleatoric / v_val
         
         self.log('lr', get_learning_rate(self.optimizer))
         self.log('train/total_loss', loss)
@@ -142,8 +144,10 @@ class NeRFSystem(LightningModule):
         log = {'val_total_loss': loss}
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
 
-        aleatoric = results[f'rgb_beta_{typ}'] / (results[f'rgb_alpha_{typ}'] - 1)
-        epistemic = aleatoric / results[f'rgb_nu_{typ}']
+        v_val = results[f'rgb_v_{typ}'].detach()
+        l_val = results[f'rgb_l_{typ}'].detach()
+        aleatoric = (v_val / (v_val - 2)) * (l_val**2)
+        epistemic = aleatoric / v_val
 
         log['val_aleatoric'] = aleatoric.mean()
         log['val_epistemic'] = epistemic.mean()
@@ -158,8 +162,8 @@ class NeRFSystem(LightningModule):
             # Visualize the loss maps as well
             # betas_viz = visualize_depth(results[f'rgb_beta_{typ}'].view(H, W)) # (3, H, W)
 
-            aleatoric = normalise_image(aleatoric.view(H, W, 3).cpu())
-            epistemic = normalise_image(epistemic.view(H, W, 3).cpu())
+            aleatoric = visualize_depth(aleatoric.view(H, W).cpu())
+            epistemic = visualize_depth(epistemic.view(H, W).cpu())
 
             stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
             stack_loss = torch.stack([diff_img, aleatoric, epistemic])

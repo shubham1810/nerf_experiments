@@ -476,13 +476,12 @@ def render_loss_rays(models,
             out = torch.cat(out_chunks, 0)
 
             # out = out.view(N_rays, N_samples_, 4)
-            out = rearrange(out, '(n1 n2) c -> n1 n2 c', n1=N_rays, n2=N_samples_, c=12+1)
+            out = rearrange(out, '(n1 n2) c -> n1 n2 c', n1=N_rays, n2=N_samples_, c=6)
 
-            rgb_alpha = out[..., 0:3] # (N_rays, N_samples_, 3)
-            rgb_beta = out[..., 3:6]
-            rgb_gamma = out[..., 6:9]
-            rgb_nu = out[..., 9:12]
-            sigmas = out[..., 12] # (N_rays, N_samples_)
+            rgb_mu = out[..., 0:3] # (N_rays, N_samples_, 3)
+            rgb_l = out[..., 3:4]
+            rgb_v = out[..., 4:5]
+            sigmas = out[..., 5] # (N_rays, N_samples_)
             
         # Convert these values using volume rendering (Section 4)
         deltas = z_vals[:, 1:] - z_vals[:, :-1] # (N_rays, N_samples_-1)
@@ -512,22 +511,20 @@ def render_loss_rays(models,
         if test_time and typ == 'coarse' and 'fine' in models:
             return
 
-        rgb_alpha_map = reduce(rearrange(weights, 'n1 n2 -> n1 n2 1')*rgb_alpha, 'n1 n2 c -> n1 c', 'sum')
-        rgb_beta_map = reduce(rearrange(weights, 'n1 n2 -> n1 n2 1')*rgb_beta, 'n1 n2 c -> n1 c', 'sum')
-        rgb_gamma_map = reduce(rearrange(weights, 'n1 n2 -> n1 n2 1')*rgb_gamma, 'n1 n2 c -> n1 c', 'sum')
-        rgb_nu_map = reduce(rearrange(weights, 'n1 n2 -> n1 n2 1')*rgb_nu, 'n1 n2 c -> n1 c', 'sum')
+        rgb_mu_map = reduce(rearrange(weights, 'n1 n2 -> n1 n2 1')*rgb_mu, 'n1 n2 c -> n1 c', 'sum')
+        rgb_l_map = reduce(rearrange(weights, 'n1 n2 -> n1 n2 1')*rgb_l, 'n1 n2 c -> n1 c', 'sum')
+        rgb_v_map = reduce(rearrange(weights, 'n1 n2 -> n1 n2 1')*rgb_v, 'n1 n2 c -> n1 c', 'sum')
 
         depth_map = reduce(weights*z_vals, 'n1 n2 -> n1', 'sum')
 
         if white_back:
-            rgb_gamma_map += 1-weights_sum.unsqueeze(1)
+            rgb_mu_map += 1-weights_sum.unsqueeze(1)
 
-        results[f'rgb_{typ}'] = rgb_gamma_map
+        results[f'rgb_{typ}'] = rgb_mu_map
         results[f'depth_{typ}'] = depth_map
 
-        results[f'rgb_alpha_{typ}'] = rgb_alpha_map
-        results[f'rgb_beta_{typ}'] = rgb_beta_map
-        results[f'rgb_nu_{typ}'] = rgb_nu_map
+        results[f'rgb_l_{typ}'] = rgb_l_map
+        results[f'rgb_v_{typ}'] = rgb_v_map
 
         return
 
